@@ -16,7 +16,7 @@ REST_COUNTRIES_API_BASE = "https://restcountries.com/v3.1"
 WORLD_BANK_API_BASE = "http://api.worldbank.org/v2/country"
 MAX_MISTAKES = 3
 
-# --- 2. HELPER FUNCTIONS ---
+# --- 2. HELPER FUNCTIONS (No change needed here) ---
 
 def normalize_text(text):
     """Removes casing and strips whitespace for a more forgiving comparison."""
@@ -140,7 +140,8 @@ ALTERNATE_NAMES = {
 
 def start_game_callback():
     """Callback to start the game immediately on button click."""
-    st.session_state.exit_message = None # Clear exit message on new game start
+    # NO STREAK RESET HERE: Streak carries over from previous game.
+    st.session_state.exit_message = None 
     
     with st.spinner('Fetching a mystery country...'):
         country = fetch_mystery_country()
@@ -174,13 +175,20 @@ def start_game_callback():
         st.session_state.guess_input = "" # Clear input
 
 def handle_exit():
-    """Clears the session and prompts the user to close the tab."""
-    # Reset all relevant state variables to simulate 'exit'
+    """
+    Clears the session and prompts the user to close the tab. 
+    Captures the final streak before resetting the session state.
+    """
+    # Capture the final streak count for the exit message
+    final_streak_value = st.session_state.current_streak
+    
+    # Reset game state
     st.session_state.game_started = False
     st.session_state.game_ended = False
-    st.session_state.current_streak = 0
+    st.session_state.current_streak = 0 # Reset streak after capturing its value
+    
     # Set a message to display after the refresh
-    st.session_state.exit_message = f"Thank you for playing TerraCaughta! Your final streak was {st.session_state.current_streak}. You can now safely close this tab."
+    st.session_state.exit_message = f"Thank you for playing TerraCaughta! Your final streak was {final_streak_value}. You can now safely close this tab."
 
 def handle_next_clue():
     """Advances the clue index when the dedicated 'Next Clue' button is pressed."""
@@ -192,7 +200,7 @@ def handle_next_clue():
         # User clicks Next Clue when on the last clue: End the game as a skip/loss
         st.session_state.game_ended = True 
         st.session_state.win = False
-        st.session_state.current_streak = 0 # STREAK RESET
+        st.session_state.current_streak = 0 # STREAK RESET on loss/skip
         st.toast("Time's up! Game over.")
 
 
@@ -218,7 +226,7 @@ def handle_submit_guess():
     if is_match:
         st.session_state.game_ended = True
         st.session_state.win = True
-        st.session_state.current_streak += 1 # STREAK INCREMENT
+        st.session_state.current_streak += 1 # STREAK INCREMENT on win
     else:
         # Wrong guess moves to next clue
         if st.session_state.clue_index < len(st.session_state.clues_list) - 1:
@@ -228,7 +236,7 @@ def handle_submit_guess():
             # Wrong guess on last clue ends game
             st.session_state.game_ended = True 
             st.session_state.win = False
-            st.session_state.current_streak = 0 # STREAK RESET
+            st.session_state.current_streak = 0 # STREAK RESET on loss
 
     # CRITICAL FIX: Clear the input box for the next turn
     st.session_state.guess_input = ""
@@ -241,8 +249,9 @@ st.markdown("---")
 
 # Check for final exit state
 if st.session_state.get('exit_message'):
+    # This renders the exit message and stops the rest of the UI from loading
     st.success(st.session_state.exit_message)
-    st.stop() # Stops execution here to prevent the rest of the app from loading
+    st.stop() 
 
 # Default Game UI
 if not st.session_state.game_started:
