@@ -150,7 +150,7 @@ def fetch_all_countries():
         # Filter: Population >= 1,000,000
         filtered_countries = [
             country for country in all_countries_data 
-            if country.get('population', 0) >= 1000000
+            if country.get('population', 0) >= 500000
         ]
         return filtered_countries
     except requests.exceptions.RequestException as e:
@@ -509,3 +509,4 @@ if st.session_state.game_ended:
             
         with col_exit:
             st.button("EXIT", on_click=handle_exit, type="secondary")
+
