@@ -210,9 +210,9 @@ if 'current_streak' not in st.session_state: st.session_state.current_streak = 0
 if 'accumulated_points' not in st.session_state: st.session_state.accumulated_points = 0
 if 'user_name' not in st.session_state: st.session_state.user_name = None
 if 'exit_message' not in st.session_state: st.session_state.exit_message = None
-if '_wb_clue' not in st.session_state: st.session_state._wb_clue = None 
-if 'last_streak' not in st.session_state: st.session_state.last_streak = 0
-if 'used_countries' not in st.session_state: st.session_state.used_countries = set() # <--- NEW: Track used countries
+if '_wb_clue' not in st.session_state: st.session_state._wb_clue = None # Temporary storage
+if 'last_streak' not in st.session_state: st.session_state.last_streak = 0 # Stores streak before loss
+if 'used_countries' not in st.session_state: st.session_state.used_countries = set() # Track used countries
 
 ALTERNATE_NAMES = {
     'netherlands': ['holland', 'the netherlands'], 
@@ -284,7 +284,7 @@ def handle_exit():
     st.session_state.current_streak = 0 
     st.session_state.accumulated_points = 0
     st.session_state.user_name = None
-    st.session_state.used_countries = set() # <--- RESET USED COUNTRIES ON EXIT
+    st.session_state.used_countries = set() # RESET USED COUNTRIES ON EXIT
     
     # Set the exit message with personalized score
     exit_msg = (
@@ -306,7 +306,7 @@ def handle_next_clue():
         st.session_state.win = False
         st.session_state.last_streak = st.session_state.current_streak # CAPTURE STREAK
         st.session_state.current_streak = 0 # STREAK RESET on loss/skip
-        st.session_state.used_countries.add(st.session_state.mystery_country['name']['common']) # <--- ADD COUNTRY TO USED LIST
+        st.session_state.used_countries.add(st.session_state.mystery_country['name']['common']) # ADD COUNTRY TO USED LIST
         st.toast("Time's up! Game over (Skipped final clue).")
 
 
@@ -336,7 +336,7 @@ def handle_submit_guess():
         st.session_state.game_ended = True
         st.session_state.win = True
         st.session_state.current_streak += 1 # STREAK INCREMENT on win
-        st.session_state.used_countries.add(country_name) # <--- ADD COUNTRY TO USED LIST
+        st.session_state.used_countries.add(country_name) # ADD COUNTRY TO USED LIST
     else:
         # Wrong guess moves to next clue
         if st.session_state.clue_index < len(st.session_state.clues_list) - 1:
@@ -348,7 +348,7 @@ def handle_submit_guess():
             st.session_state.win = False
             st.session_state.last_streak = st.session_state.current_streak # CAPTURE STREAK
             st.session_state.current_streak = 0 # STREAK RESET on loss
-            st.session_state.used_countries.add(country_name) # <--- ADD COUNTRY TO USED LIST
+            st.session_state.used_countries.add(country_name) # ADD COUNTRY TO USED LIST
 
     st.session_state.guess_input = ""
 
@@ -444,21 +444,26 @@ if st.session_state.game_ended:
 
     col_msg, col_flag = st.columns([1.5, 1])
 
+    # Determine which streak count to display for the final results
+    display_streak = st.session_state.current_streak 
+    # If the user lost (win=False) and the last recorded streak was > 0, use the captured value
+    if not st.session_state.win and st.session_state.last_streak > 0:
+        display_streak = st.session_state.last_streak
+
     with col_msg:
         # Personalized Win/Loss Message
         points_gained_this_round = POINT_MAP.get(st.session_state.clue_index, 0)
         
         if st.session_state.get('win', False):
             # Win Message 
-            if st.session_state.current_streak > 1:
-                st.success(f"🎉 Great going, {name}! You earned **{points_gained_this_round} points** this round and are on a streak of **{st.session_state.current_streak}** countries!")
+            if display_streak > 1:
+                st.success(f"🎉 Great going, {name}! You earned **{points_gained_this_round} points** this round and are on a streak of **{display_streak}** countries!")
             else:
                  st.success(f"🎉 CORRECT, {name}! You earned **{points_gained_this_round} points** this round!")
             st.balloons()
             
         else:
-            # Loss Message (Uses captured streak value)
-            display_streak = st.session_state.last_streak
+            # Loss Message 
             if display_streak > 0:
                  st.error(f"💀 Your streak ended at **{display_streak}**! Oops, {name}, you didn't get it this time. The country was **{country['name']['common']}**.")
             else:
@@ -484,7 +489,3 @@ if st.session_state.game_ended:
         col_play, col_exit = st.columns([1, 1])
         
         with col_play:
-            st.button("Play Again", on_click=initialize_game, type="primary")
-            
-        with col_exit:
-            st.button("EXIT", on_click=handle_exit, type="secondary")
