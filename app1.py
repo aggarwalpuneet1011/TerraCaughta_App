@@ -116,23 +116,21 @@ def plot_coordinate_clue(lat, lon):
             showcountries = True,
             showocean = True,
             oceancolor = 'rgb(17, 17, 17)',  # Dark ocean color
-            # Use 'scope' and projection type to set a minimal, zoomable world view
             projection_type = 'natural earth', 
-            # This enables scroll, pan, and zoom controls
             lataxis = dict(showgrid=True, gridcolor='gray', griddash='dot'),
             lonaxis = dict(showgrid=True, gridcolor='gray', griddash='dot'),
         ),
         margin={"r":0,"t":0,"l":0,"b":0},
         height=400,
-        template='plotly_dark' # Use dark theme for better visual contrast
+        template='plotly_dark' 
     )
     
     # Set the initial view to zoom in slightly on the marker's location
     fig.update_geos(
-        lataxis_range=[lat - 30, lat + 30], # Initial slight zoom around the latitude
-        lonaxis_range=[lon - 30, lon + 30], # Initial slight zoom around the longitude
-        center=dict(lat=lat, lon=lon), # Center on the point
-        projection_scale=1.5 # Initial zoom level
+        lataxis_range=[lat - 30, lat + 30], 
+        lonaxis_range=[lon - 30, lon + 30], 
+        center=dict(lat=lat, lon=lon), 
+        projection_scale=1.5 
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -207,7 +205,7 @@ if 'accumulated_points' not in st.session_state: st.session_state.accumulated_po
 if 'user_name' not in st.session_state: st.session_state.user_name = None
 if 'exit_message' not in st.session_state: st.session_state.exit_message = None
 if '_wb_clue' not in st.session_state: st.session_state._wb_clue = None # Temporary storage
-
+if 'last_streak' not in st.session_state: st.session_state.last_streak = 0 # <--- NEW: Stores streak before loss
 
 ALTERNATE_NAMES = {
     'netherlands': ['holland', 'the netherlands'], 
@@ -298,6 +296,7 @@ def handle_next_clue():
         # User clicks Next Clue when on the last clue: End the game as a skip/loss
         st.session_state.game_ended = True 
         st.session_state.win = False
+        st.session_state.last_streak = st.session_state.current_streak # CAPTURE STREAK
         st.session_state.current_streak = 0 # STREAK RESET on loss/skip
         st.toast("Time's up! Game over (Skipped final clue).")
 
@@ -337,6 +336,7 @@ def handle_submit_guess():
             # Wrong guess on last clue ends game
             st.session_state.game_ended = True 
             st.session_state.win = False
+            st.session_state.last_streak = st.session_state.current_streak # CAPTURE STREAK
             st.session_state.current_streak = 0 # STREAK RESET on loss
 
     st.session_state.guess_input = ""
@@ -381,6 +381,7 @@ if st.session_state.game_started and not st.session_state.game_ended:
 
     # --- LEFT COLUMN: MAP (Visual Clue) ---
     with col_map:
+        st.subheader("Visual Context (Zoomable)")
         plot_coordinate_clue(st.session_state.lat, st.session_state.lon)
         st.caption("Use the controls on the map to zoom in for more detail.")
         st.markdown("---")
@@ -429,6 +430,12 @@ if st.session_state.game_started and not st.session_state.game_ended:
 if st.session_state.game_ended:
     country = st.session_state.mystery_country
     name = st.session_state.user_name
+    
+    # Determine which streak count to display
+    display_streak = st.session_state.current_streak 
+    # If the user lost, the current streak is 0, so we use the captured 'last_streak' value.
+    if not st.session_state.win and st.session_state.last_streak > 0:
+        display_streak = st.session_state.last_streak
 
     col_msg, col_flag = st.columns([1.5, 1])
 
@@ -437,20 +444,24 @@ if st.session_state.game_ended:
         points_gained_this_round = POINT_MAP.get(st.session_state.clue_index, 0)
         
         if st.session_state.get('win', False):
-            # Personalized Success Message
+            # Win Message (Current streak is the new streak)
             if st.session_state.current_streak > 1:
                 st.success(f"🎉 Great going, {name}! You earned **{points_gained_this_round} points** this round and are on a streak of **{st.session_state.current_streak}** countries!")
             else:
                  st.success(f"🎉 CORRECT, {name}! You earned **{points_gained_this_round} points** this round!")
             st.balloons()
+            
         else:
-            # Personalized Failure Message
-            st.error(f"💀 Oops, {name}, you didn't get it this time. The country was **{country['name']['common']}**.")
+            # Loss Message (Uses captured streak value)
+            if display_streak > 0:
+                 st.error(f"💀 Your streak ended at **{display_streak}**! Oops, {name}, you didn't get it this time. The country was **{country['name']['common']}**.")
+            else:
+                st.error(f"💀 Oops, {name}, you didn't get it this time. The country was **{country['name']['common']}**.")
             
         st.markdown("---")
         
         # Final Streak and Points Display
-        st.subheader(f"🔥 Final Streak: {st.session_state.current_streak}")
+        st.subheader(f"🔥 Final Streak: {display_streak}")
         st.subheader(f"💰 Total Points: {st.session_state.accumulated_points}")
         st.markdown("---")
         
