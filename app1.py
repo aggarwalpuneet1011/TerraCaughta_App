@@ -136,14 +136,11 @@ def plot_coordinate_clue(lat, lon):
     st.plotly_chart(fig, use_container_width=True)
 
 # --- Robust Data Fetching with Coordinate Check and Uniqueness Check ---
-def fetch_mystery_country():
-    """
-    Fetches filtered country data, removes microstates, and selects one country randomly.
-    Includes checks for valid coordinates and, importantly, uniqueness within the session.
-    """
+@st.cache_data(ttl=3600) # Cache the full country list for 1 hour to reduce API calls
+def fetch_all_countries():
+    """Fetches and filters the full list of countries once."""
     fields = "name,capital,flags,population,region,currencies,borders,cca2,latlng"
     full_url = f"{REST_COUNTRIES_API_BASE}/all?fields={fields}"
-
     try:
         response = requests.get(full_url)
         response.raise_for_status()
@@ -155,45 +152,52 @@ def fetch_mystery_country():
             country for country in all_countries_data 
             if country.get('population', 0) >= 1000000
         ]
-
-        if not filtered_countries:
-            st.error("Error: No countries found after filtering!")
-            return None
-        
-        # --- EDGE CASE FIX: Loop to ensure we get a country with valid coordinates and is UNUSED ---
-        MAX_RETRIES = 100
-        for i in range(MAX_RETRIES):
-            mystery_country = random.choice(filtered_countries)
-            country_name = mystery_country['name']['common']
-            
-            # Check 1: Is this country already used in the session?
-            if country_name in st.session_state.used_countries:
-                continue # Skip to the next random choice
-            
-            # 2. Get ISO Code (needed for World Bank API)
-            country_iso_code = mystery_country.get('cca2', 'XX')
-            
-            # 3. Check World Bank Data
-            world_bank_clue = get_world_bank_clue(country_iso_code)
-            
-            # Check 2: Does this country have valid coordinates?
-            if world_bank_clue['lat'] is not None and world_bank_clue['lon'] is not None:
-                # Success! Found a valid, unused country.
-                if 'borders' not in mystery_country or len(mystery_country['borders']) == 0:
-                    mystery_country['borders'] = ['Island'] 
-                
-                st.session_state._wb_clue = world_bank_clue 
-                return mystery_country
-            
-            # If coordinates were None, the loop continues to the next retry
-
-        st.error("Error: Failed to find a new, valid country after 100 attempts. Resetting used country list.")
-        st.session_state.used_countries = set() # Emergency reset
-        return fetch_mystery_country() # Try again with a clear list
-
+        return filtered_countries
     except requests.exceptions.RequestException as e:
-        st.error(f"A connection error occurred with REST Countries API: {e}")
+        st.error(f"FATAL API ERROR: Could not fetch country data: {e}")
+        return []
+
+def select_mystery_country(filtered_countries):
+    """Selects a unique country with valid World Bank coordinates."""
+    
+    if not filtered_countries:
         return None
+    
+    MAX_RETRIES = 100
+    for i in range(MAX_RETRIES):
+        
+        # Check if all possible countries have been used in this session
+        if len(st.session_state.used_countries) >= len(filtered_countries):
+            st.warning("You have guessed all available countries! Resetting list.")
+            st.session_state.used_countries = set()
+            # Loop will continue with fresh list
+        
+        mystery_country = random.choice(filtered_countries)
+        country_name = mystery_country['name']['common']
+        
+        # Check 1: Is this country already used in the session?
+        if country_name in st.session_state.used_countries:
+            continue
+        
+        # 2. Get ISO Code (needed for World Bank API)
+        country_iso_code = mystery_country.get('cca2', 'XX')
+        
+        # 3. Check World Bank Data
+        world_bank_clue = get_world_bank_clue(country_iso_code)
+        
+        # Check 2: Does this country have valid coordinates?
+        if world_bank_clue['lat'] is not None and world_bank_clue['lon'] is not None:
+            # Success! Found a valid, unused country.
+            if 'borders' not in mystery_country or len(mystery_country['borders']) == 0:
+                mystery_country['borders'] = ['Island'] 
+            
+            st.session_state._wb_clue = world_bank_clue 
+            return mystery_country
+        
+        # If coordinates were None, the loop continues to the next retry
+
+    st.error("Error: Failed to find a new, valid country after 100 attempts.")
+    return None
 
 
 # --- 3. STREAMLIT APP LOGIC ---
@@ -213,6 +217,7 @@ if 'exit_message' not in st.session_state: st.session_state.exit_message = None
 if '_wb_clue' not in st.session_state: st.session_state._wb_clue = None # Temporary storage
 if 'last_streak' not in st.session_state: st.session_state.last_streak = 0 # Stores streak before loss
 if 'used_countries' not in st.session_state: st.session_state.used_countries = set() # Track used countries
+
 
 ALTERNATE_NAMES = {
     'netherlands': ['holland', 'the netherlands'], 
@@ -241,10 +246,18 @@ def initialize_game():
     """Fetches new data and resets session state for a new game."""
     st.session_state.exit_message = None 
     
-    with st.spinner('Fetching a mystery country...'):
-        country = fetch_mystery_country()
+    # 1. Fetch country list (cached) and select a mystery country
+    filtered_countries = fetch_all_countries()
+    if not filtered_countries:
+        # Stop game if we can't get data (this handles FATAL API ERROR early)
+        st.session_state.mystery_country = None
+        st.error("Cannot start game: Data unavailable. Check internet or API status.")
+        return
+
+    with st.spinner('Fetching a unique mystery country...'):
+        country = select_mystery_country(filtered_countries)
         st.session_state.mystery_country = country
-        
+
     if country:
         # --- Use pre-fetched World Bank data ---
         world_bank_data = st.session_state._wb_clue
@@ -263,7 +276,7 @@ def initialize_game():
             
             f"Clue 2 (8 Points Potential): Population: **{country['population']:,}**.",
             f"Clue 3 (6 Points Potential): Currency Code: **{currency}**.",
-            f"Clue 4 (4 Points Potential): Neighbors: **{border_names}**.", 
+            f"Clue 4 (4 Points Points Potential): Neighbors: **{border_names}**.", 
             f"Clue 5 (2 Points Potential): Capital City: **{country.get('capital', ['Unknown'])[0]}**.",
         ]
         
@@ -302,4 +315,197 @@ def handle_next_clue():
         st.session_state.clue_index += 1
     else:
         # User clicks Next Clue when on the last clue: End the game as a skip/loss
+        st.session_state.game_ended = True 
+        st.session_state.win = False
+        st.session_state.last_streak = st.session_state.current_streak # CAPTURE STREAK
+        st.session_state.current_streak = 0 # STREAK RESET on loss/skip
+        st.session_state.used_countries.add(st.session_state.mystery_country['name']['common']) # ADD COUNTRY TO USED LIST
+        st.toast("Time's up! Game over (Skipped final clue).")
+
+
+def handle_submit_guess():
+    """Handles guess submission, updates points, and manages streak/game state."""
+    user_guess = normalize_text(st.session_state.guess_input)
+    
+    if not user_guess:
+        st.warning("Please enter a guess or use the 'Next Clue' button to skip.")
+        return
+
+    # 1. Match Logic
+    country_name = st.session_state.mystery_country['name']['common']
+    normalized_name = normalize_text(country_name)
+    
+    is_match = False
+    if user_guess == normalized_name: is_match = True
+    elif normalized_name in ALTERNATE_NAMES and user_guess in ALTERNATE_NAMES[normalized_name]: is_match = True
+    elif len(user_guess) > 3 and Levenshtein.distance(user_guess, normalized_name) <= MAX_MISTAKES: is_match = True
+    
+    # 2. Handle Result
+    if is_match:
+        # Calculate and accumulate points
+        points_awarded = POINT_MAP.get(st.session_state.clue_index, 0)
+        st.session_state.accumulated_points += points_awarded
+        
         st.session_state.game_ended = True
+        st.session_state.win = True
+        st.session_state.current_streak += 1 # STREAK INCREMENT on win
+        st.session_state.used_countries.add(country_name) # ADD COUNTRY TO USED LIST
+    else:
+        # Wrong guess moves to next clue
+        if st.session_state.clue_index < len(st.session_state.clues_list) - 1:
+            st.session_state.clue_index += 1
+            st.toast(f"'{user_guess}' was incorrect. Next clue revealed!")
+        else:
+            # Wrong guess on last clue ends game
+            st.session_state.game_ended = True 
+            st.session_state.win = False
+            st.session_state.last_streak = st.session_state.current_streak # CAPTURE STREAK
+            st.session_state.current_streak = 0 # STREAK RESET on loss
+            st.session_state.used_countries.add(country_name) # ADD COUNTRY TO USED LIST
+
+    st.session_state.guess_input = ""
+
+
+# --- 4. UI RENDERER (Optimized) ---
+st.title("🌎 TerraCaughta")
+st.markdown("A daily geography challenge built for the web. Use clues to find the hidden country!")
+st.markdown("---")
+
+# Check for final exit state
+if st.session_state.get('exit_message'):
+    st.success(st.session_state.exit_message)
+    st.stop() 
+
+# --- NAME CAPTURE SCREEN (Appears first) ---
+if st.session_state.user_name is None:
+    st.subheader("Welcome to TerraCaughta!")
+    st.markdown("Before we start, let's get your name so we can personalize your score tracking.")
+    
+    st.text_input(
+        "Enter your name:",
+        key="name_input",
+        placeholder="Your Name",
+        on_change=handle_name_submit # Triggers submission on Enter key
+    )
+    st.button("Start Game", on_click=handle_name_submit, type="primary")
+    
+    # If API load fails early, show the error here
+    if st.session_state.mystery_country is None and st.session_state.game_started:
+        st.error("Data Load Error: Could not initialize the game. Please try refreshing the app.")
+    
+    # Stop rendering the rest of the app until name is submitted
+    st.stop() 
+
+
+# --- GAME IN PROGRESS UI ---
+if st.session_state.game_started and not st.session_state.game_ended:
+    
+    name = st.session_state.user_name
+    
+    st.markdown(f"**Hello, {name}!** | 🔥 Streak: **{st.session_state.current_streak}** | 💰 Points: **{st.session_state.accumulated_points}**")
+    st.markdown("---")
+
+    col_map, col_clues = st.columns([1, 1.5]) 
+
+    # --- LEFT COLUMN: MAP (Visual Clue) ---
+    with col_map:
+        st.subheader("Visual Context (Zoomable)")
+        plot_coordinate_clue(st.session_state.lat, st.session_state.lon)
+        st.caption("Use the controls on the map to zoom in for more detail.")
+        st.markdown("---")
+    
+    # --- RIGHT COLUMN: CLUES & INPUT ---
+    with col_clues:
+        
+        # Clues Section
+        st.subheader(f"Clues Revealed ({st.session_state.clue_index + 1} of 5)")
+        
+        with st.container(border=True):
+            for clue in st.session_state.clues_list[:st.session_state.clue_index + 1]:
+                st.markdown(f"**{clue}**")
+
+        # Input Section
+        st.markdown("**---**")
+        st.markdown("#### Guess or Advance")
+        
+        st.text_input(
+            "Enter your Country Guess:",
+            key="guess_input",
+            placeholder="Type country name...",
+            on_change=handle_submit_guess
+        )
+        
+        # Determine button labels
+        guess_label = "Submit Guess"
+        next_clue_label = "Next Clue"
+        
+        if st.session_state.clue_index == len(st.session_state.clues_list) - 2: 
+            next_clue_label = "Last Clue"
+        elif st.session_state.clue_index == len(st.session_state.clues_list) - 1: 
+            next_clue_label = "End Game"
+        
+        # Use columns to place buttons side-by-side
+        col_submit, col_next = st.columns([1, 1])
+        
+        with col_submit:
+            st.button(guess_label, on_click=handle_submit_guess, type="primary") 
+            
+        with col_next:
+            st.button(next_clue_label, on_click=handle_next_clue, type="secondary")
+
+
+# --- END GAME SCREEN UI ---
+if st.session_state.game_ended:
+    country = st.session_state.mystery_country
+    name = st.session_state.user_name
+
+    col_msg, col_flag = st.columns([1.5, 1])
+
+    # Determine which streak count to display for the final results (FIXED NAMEERROR SCOPE)
+    display_streak = st.session_state.current_streak 
+    if not st.session_state.win and st.session_state.last_streak > 0:
+        display_streak = st.session_state.last_streak
+
+    with col_msg:
+        # Personalized Win/Loss Message
+        points_gained_this_round = POINT_MAP.get(st.session_state.clue_index, 0)
+        
+        if st.session_state.get('win', False):
+            # Win Message 
+            if display_streak > 1:
+                st.success(f"🎉 Great going, {name}! You earned **{points_gained_this_round} points** this round and are on a streak of **{display_streak}** countries!")
+            else:
+                 st.success(f"🎉 CORRECT, {name}! You earned **{points_gained_this_round} points** this round!")
+            st.balloons()
+            
+        else:
+            # Loss Message 
+            if display_streak > 0:
+                 st.error(f"💀 Your streak ended at **{display_streak}**! Oops, {name}, you didn't get it this time. The country was **{country['name']['common']}**.")
+            else:
+                st.error(f"💀 Oops, {name}, you didn't get it this time. The country was **{country['name']['common']}**.")
+            
+        st.markdown("---")
+        
+        # Final Streak and Points Display
+        st.subheader(f"🔥 Final Streak: {display_streak}")
+        st.subheader(f"💰 Total Points: {st.session_state.accumulated_points}")
+        st.markdown("---")
+        
+        st.subheader("Final Clue Review:")
+        
+        with st.container(border=True):
+            for clue in st.session_state.clues_list:
+                st.markdown(f"- {clue}") 
+        
+    with col_flag:
+        st.image(country['flags']['png'], caption=f"Flag of {country['name']['common']}")
+        
+        # Button Section
+        col_play, col_exit = st.columns([1, 1])
+        
+        with col_play:
+            st.button("Play Again", on_click=initialize_game, type="primary")
+            
+        with col_exit:
+            st.button("EXIT", on_click=handle_exit, type="secondary")
