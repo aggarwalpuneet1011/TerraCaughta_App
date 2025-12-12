@@ -135,11 +135,11 @@ def plot_coordinate_clue(lat, lon):
 
     st.plotly_chart(fig, use_container_width=True)
 
-# --- Robust Data Fetching with Coordinate Check ---
+# --- Robust Data Fetching with Coordinate Check and Uniqueness Check ---
 def fetch_mystery_country():
     """
     Fetches filtered country data, removes microstates, and selects one country randomly.
-    Includes a check to ensure the selected country has valid coordinates from the World Bank.
+    Includes checks for valid coordinates and, importantly, uniqueness within the session.
     """
     fields = "name,capital,flags,population,region,currencies,borders,cca2,latlng"
     full_url = f"{REST_COUNTRIES_API_BASE}/all?fields={fields}"
@@ -160,30 +160,36 @@ def fetch_mystery_country():
             st.error("Error: No countries found after filtering!")
             return None
         
-        # --- EDGE CASE FIX: Loop to ensure we get a country with valid coordinates ---
-        MAX_RETRIES = 50
+        # --- EDGE CASE FIX: Loop to ensure we get a country with valid coordinates and is UNUSED ---
+        MAX_RETRIES = 100
         for i in range(MAX_RETRIES):
             mystery_country = random.choice(filtered_countries)
+            country_name = mystery_country['name']['common']
             
-            # 1. Get ISO Code (needed for World Bank API)
+            # Check 1: Is this country already used in the session?
+            if country_name in st.session_state.used_countries:
+                continue # Skip to the next random choice
+            
+            # 2. Get ISO Code (needed for World Bank API)
             country_iso_code = mystery_country.get('cca2', 'XX')
             
-            # 2. Check World Bank Data
+            # 3. Check World Bank Data
             world_bank_clue = get_world_bank_clue(country_iso_code)
             
+            # Check 2: Does this country have valid coordinates?
             if world_bank_clue['lat'] is not None and world_bank_clue['lon'] is not None:
-                # Success! Found a valid country.
+                # Success! Found a valid, unused country.
                 if 'borders' not in mystery_country or len(mystery_country['borders']) == 0:
                     mystery_country['borders'] = ['Island'] 
                 
-                # Store the valid World Bank data temporarily for the initializer
                 st.session_state._wb_clue = world_bank_clue 
                 return mystery_country
             
             # If coordinates were None, the loop continues to the next retry
 
-        st.error("Error: Failed to find a valid country with coordinates after 50 attempts. Please try again.")
-        return None
+        st.error("Error: Failed to find a new, valid country after 100 attempts. Resetting used country list.")
+        st.session_state.used_countries = set() # Emergency reset
+        return fetch_mystery_country() # Try again with a clear list
 
     except requests.exceptions.RequestException as e:
         st.error(f"A connection error occurred with REST Countries API: {e}")
@@ -204,8 +210,9 @@ if 'current_streak' not in st.session_state: st.session_state.current_streak = 0
 if 'accumulated_points' not in st.session_state: st.session_state.accumulated_points = 0
 if 'user_name' not in st.session_state: st.session_state.user_name = None
 if 'exit_message' not in st.session_state: st.session_state.exit_message = None
-if '_wb_clue' not in st.session_state: st.session_state._wb_clue = None # Temporary storage
-if 'last_streak' not in st.session_state: st.session_state.last_streak = 0 # <--- NEW: Stores streak before loss
+if '_wb_clue' not in st.session_state: st.session_state._wb_clue = None 
+if 'last_streak' not in st.session_state: st.session_state.last_streak = 0
+if 'used_countries' not in st.session_state: st.session_state.used_countries = set() # <--- NEW: Track used countries
 
 ALTERNATE_NAMES = {
     'netherlands': ['holland', 'the netherlands'], 
@@ -239,7 +246,7 @@ def initialize_game():
         st.session_state.mystery_country = country
         
     if country:
-        # --- EDGE CASE FIX: Use pre-fetched World Bank data ---
+        # --- Use pre-fetched World Bank data ---
         world_bank_data = st.session_state._wb_clue
         # --------------------------------------------------
         
@@ -277,6 +284,7 @@ def handle_exit():
     st.session_state.current_streak = 0 
     st.session_state.accumulated_points = 0
     st.session_state.user_name = None
+    st.session_state.used_countries = set() # <--- RESET USED COUNTRIES ON EXIT
     
     # Set the exit message with personalized score
     exit_msg = (
@@ -298,6 +306,7 @@ def handle_next_clue():
         st.session_state.win = False
         st.session_state.last_streak = st.session_state.current_streak # CAPTURE STREAK
         st.session_state.current_streak = 0 # STREAK RESET on loss/skip
+        st.session_state.used_countries.add(st.session_state.mystery_country['name']['common']) # <--- ADD COUNTRY TO USED LIST
         st.toast("Time's up! Game over (Skipped final clue).")
 
 
@@ -327,6 +336,7 @@ def handle_submit_guess():
         st.session_state.game_ended = True
         st.session_state.win = True
         st.session_state.current_streak += 1 # STREAK INCREMENT on win
+        st.session_state.used_countries.add(country_name) # <--- ADD COUNTRY TO USED LIST
     else:
         # Wrong guess moves to next clue
         if st.session_state.clue_index < len(st.session_state.clues_list) - 1:
@@ -338,6 +348,7 @@ def handle_submit_guess():
             st.session_state.win = False
             st.session_state.last_streak = st.session_state.current_streak # CAPTURE STREAK
             st.session_state.current_streak = 0 # STREAK RESET on loss
+            st.session_state.used_countries.add(country_name) # <--- ADD COUNTRY TO USED LIST
 
     st.session_state.guess_input = ""
 
@@ -430,12 +441,6 @@ if st.session_state.game_started and not st.session_state.game_ended:
 if st.session_state.game_ended:
     country = st.session_state.mystery_country
     name = st.session_state.user_name
-    
-    # Determine which streak count to display
-    display_streak = st.session_state.current_streak 
-    # If the user lost, the current streak is 0, so we use the captured 'last_streak' value.
-    if not st.session_state.win and st.session_state.last_streak > 0:
-        display_streak = st.session_state.last_streak
 
     col_msg, col_flag = st.columns([1.5, 1])
 
@@ -444,7 +449,7 @@ if st.session_state.game_ended:
         points_gained_this_round = POINT_MAP.get(st.session_state.clue_index, 0)
         
         if st.session_state.get('win', False):
-            # Win Message (Current streak is the new streak)
+            # Win Message 
             if st.session_state.current_streak > 1:
                 st.success(f"🎉 Great going, {name}! You earned **{points_gained_this_round} points** this round and are on a streak of **{st.session_state.current_streak}** countries!")
             else:
@@ -453,6 +458,7 @@ if st.session_state.game_ended:
             
         else:
             # Loss Message (Uses captured streak value)
+            display_streak = st.session_state.last_streak
             if display_streak > 0:
                  st.error(f"💀 Your streak ended at **{display_streak}**! Oops, {name}, you didn't get it this time. The country was **{country['name']['common']}**.")
             else:
