@@ -3,9 +3,10 @@ import requests
 import random
 import sys
 import Levenshtein 
-import pandas as pd
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature
 import time
-import pydeck as pdk # <-- NEW: Import Pydeck for custom map control
 
 # --- 0. STREAMLIT PAGE CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="TerraCaughta", page_icon="🌎")
@@ -43,7 +44,9 @@ def get_border_names(border_codes):
         return "Border data unavailable."
 
 def get_world_bank_clue(country_iso_code):
-    """Fetches coordinates and Income Level, and formats them for the desired structured output."""
+    """
+    Fetches coordinates and Income Level, and formats them for the desired structured output.
+    """
     url = f"{WORLD_BANK_API_BASE}/{country_iso_code}?format=json&per_page=1"
     try:
         response = requests.get(url)
@@ -78,45 +81,26 @@ def get_world_bank_clue(country_iso_code):
     except Exception:
         return {'location': 'Unavailable', 'classification': 'Unavailable', 'lat': None, 'lon': None}
 
-# --- FIX 1: PLOTTING WITH PYDECK FOR UNLABELED MAP & ZOOMABILITY ---
+# --- RESTORED: PLOTTING WITH MATPLOTLIB/CARTOPY ---
 def plot_coordinate_clue(lat, lon):
-    """Plots the coordinate using pydeck for a zoomable, unlabeled map."""
+    """Plots the coordinate on a Cartopy map (static image)."""
     if lat is None or lon is None:
         st.warning("Map Clue: Cannot plot due to missing coordinates.")
         return
-    
-    # DataFrame for the single point
-    map_data = pd.DataFrame({
-        'lat': [lat],
-        'lon': [lon],
-    })
-    
-    # Initial View State (World view, centered on the point)
-    view_state = pdk.ViewState(
-        latitude=lat,
-        longitude=lon,
-        zoom=3, # Initial zoom level
-        pitch=0,
-    )
-    
-    # Scatterplot Layer (The red marker/star)
-    layer = pdk.Layer(
-        'ScatterplotLayer',
-        data=map_data,
-        get_position='[lon, lat]',
-        get_color='[255, 0, 0, 200]', # Red color for the marker
-        get_radius=200000, # Adjust size of the marker (in meters)
-        pickable=True,
-    )
-
-    # Render the Pydeck chart. The map style 'mapbox://styles/mapbox/dark-v9' 
-    # provides a clean, unlabeled dark background similar to Cartopy's minimalist style.
-    st.pydeck_chart(pdk.Deck(
-        map_style="mapbox://styles/mapbox/dark-v9", # Use a dark, minimalist map style
-        initial_view_state=view_state,
-        layers=[layer],
-    ), use_container_width=True)
-
+        
+    try:
+        fig = plt.figure(figsize=(6, 6)) 
+        ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree()) 
+        ax.coastlines(resolution='50m', color='gray', linewidth=0.5)
+        ax.add_feature(cartopy.feature.LAND, facecolor='#eeeeee')
+        ax.set_global() 
+        ax.gridlines(draw_labels=False, linewidth=0.5, color='black', alpha=0.3)
+        ax.plot(lon, lat, color='red', marker='*', markersize=12, transform=ccrs.PlateCarree()) 
+        plt.title(f"Clue 1: Center Point Location (Visual Aid)", fontsize=14)
+        st.pyplot(fig) 
+        plt.close(fig) 
+    except Exception:
+        st.error("Visualization Error: Could not generate Cartopy map plot.")
 
 def fetch_mystery_country():
     """Fetches a random country with population > 1M."""
@@ -314,7 +298,7 @@ if st.session_state.game_started and not st.session_state.game_ended:
     # --- LEFT COLUMN: MAP (Visual Clue) ---
     with col_map:
         plot_coordinate_clue(st.session_state.lat, st.session_state.lon)
-        st.caption("Use your mouse/touchpad to zoom in on the marker.")
+        st.caption("The map remains fixed throughout the game.")
         st.markdown("---")
     
     # --- RIGHT COLUMN: CLUES & INPUT ---
